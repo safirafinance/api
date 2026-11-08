@@ -1,6 +1,6 @@
 # Stellar Options — MVP Design Document
 
-> **Version:** 1.0
+> **Version:** 1.1
 > **Date:** November 8, 2026
 > **Scope:** Full MVP without LP module
 > **Status:** Approved for implementation
@@ -34,7 +34,7 @@ Separate repositories:
 | Repo | Contents |
 |---|---|
 | `safira-contracts` | Soroban smart contracts (Rust) |
-| `safira-api` | All backend microservices (TS monorepo with workspaces) |
+| `safira-api` | Backend: API Server + Settlement Worker (modular monolith) |
 | `safira-web` | Next.js frontend |
 | `safira-sdk` | TypeScript SDK (`@safira/sdk`) |
 | `safira-ui-kit` | React component library (`@safira/ui-kit`) |
@@ -43,27 +43,64 @@ Separate repositories:
 
 ## 2. Service Architecture
 
-Microservices architecture. All backend services live in the `safira-api` repo as a pnpm/turborepo workspace. Each service is a separate Docker container.
+Hybrid architecture: **modular monolith API Server** + **separate Settlement Worker**. All business logic modules run in a single Node.js process with direct function calls between them. Settlement and oracle monitoring run as a separate process to avoid coupling with the API lifecycle.
 
-### 2.1 Service Decomposition
+### 2.1 Two Processes
 
-| Service | Responsibility | Port | Communication |
-|---|---|---|---|
-| **API Gateway** | Public REST API for users, partners, SDK. Auth, rate limiting, request routing | 3000 | REST in, Redis pub/sub internal |
-| **RFQ Service** | Quote requests to MMs and Vault, validation, best execution selection | 3001 | Redis pub/sub |
-| **MM Gateway** | WebSocket server for market makers. Auth, quote ingestion, RFQ distribution | 3002 | WebSocket in (from MMs), Redis pub/sub |
-| **Strategy Service** | Automated Wheel execution, strategy state management, user configs | 3003 | Redis pub/sub |
-| **Prediction Service** | TradingView webhook receiver, signal interpretation, advisory to Strategy | 3004 | HTTP webhooks in, Redis pub/sub |
-| **Risk Service** | Position limits, exposure checks, Vault capital limits, hard/dynamic constraints | 3005 | Redis pub/sub, internal HTTP |
-| **Settlement Worker** | Monitors Soroban for expiry, triggers settlement, oracle price checks | — | Stellar SDK, polling |
-| **Oracle Service** | Chainlink price feeds, backup oracle, staleness checks, expiry price determination | 3006 | External APIs, Redis cache |
-| **Notification Service** | Position status updates, strategy events, webhooks to partners | 3007/3008 | Redis pub/sub, WebSocket out |
+| Process | Port | Responsibility |
+|---|---|---|
+| **API Server** | 3000 (HTTP), 3001 (WS for MMs), 3002 (WS for users) | All request handling, RFQ, trading, strategy, prediction webhooks, notifications |
+| **Settlement Worker** | — (no port) | Monitors Soroban for expiry events, oracle price feeds, settlement triggers, reconciliation |
 
-### 2.2 Shared Infrastructure
+### 2.2 API Server Internal Modules
 
-- **PostgreSQL** — single database, schema-per-service isolation
-- **Redis** — pub/sub messaging between services + caching (quotes, prices, sessions)
+All modules run in a single Fastify process and communicate via direct function calls (no network overhead, no serialization).
+
+```
+src/
+├── modules/
+│   ├── rfq/              # RFQ lifecycle, best execution, quote validation
+│   ├── mm-gateway/       # WebSocket server for market makers, quote ingestion
+│   ├── positions/        # Position CRUD, status tracking, on-chain mirroring
+│   ├── strategy/         # Automated Wheel state machine, strategy configs
+│   ├── prediction/       # TradingView webhook receiver, signal parsing
+│   ├── risk/             # Position limits, exposure checks, capital limits
+│   ├── vault/            # Internal Vault pricing (Black-76), capital tracking
+│   ├── notifications/    # WebSocket push to users, partner webhook delivery
+│   └── auth/             # Wallet signature verification, API key management
+├── routes/               # Fastify route definitions (thin layer, delegates to modules)
+├── shared/               # DB client, Redis client, Stellar SDK helpers, types
+└── config/               # Environment config, feature flags
+```
+
+Each module exposes a typed interface (e.g. `RfqModule.requestQuotes(...)`) and receives dependencies via constructor injection. Modules do not import each other directly — they depend on interfaces, making future extraction to separate services straightforward.
+
+### 2.3 Settlement Worker Internal Structure
+
+```
+src/
+├── workers/
+│   ├── oracle/           # Chainlink price polling, backup oracle, freshness checks
+│   ├── settlement/       # Expiry scanning, settlement triggers, collateral release
+│   └── reconciliation/   # On-chain vs off-chain state comparison, drift detection
+├── shared/               # Shared with API Server: DB client, Stellar SDK, types
+└── config/
+```
+
+Runs on a polling loop (configurable interval). No HTTP server. Communicates with API Server only through the shared PostgreSQL database and Redis pub/sub (for event notifications).
+
+### 2.4 Shared Infrastructure
+
+- **PostgreSQL** — single database, shared by both processes
+- **Redis** — caching (quotes, prices) + pub/sub (Settlement Worker → API Server event notifications)
 - **Soroban** — single `options_core` contract on Stellar testnet (dev/staging) and mainnet (production)
+
+### 2.5 Why Not Microservices
+
+- Direct function calls between modules: zero latency, no serialization, simple debugging
+- One process to deploy, monitor, and debug for all API logic
+- Settlement Worker is separate because it has a fundamentally different lifecycle (polling, not request-driven) and must not be affected by API restarts or load
+- Modules have clean interfaces — any module can be extracted to a separate service later if scale demands it
 
 ---
 
@@ -135,7 +172,7 @@ pub struct Option {
 
 ### 3.5 Settlement Flow
 
-1. At expiry, Oracle Service calls `set_expiry_price` with verified price
+1. At expiry, Settlement Worker's oracle module calls `set_expiry_price` with verified price
 2. If ITM: buyer has `settlement_window` (configurable, e.g. 24h) to call `exercise` with counter-asset
 3. `exercise` atomically swaps seller's collateral for buyer's counter-asset at strike price
 4. If buyer doesn't exercise within window: anyone can call `release_collateral`
@@ -148,19 +185,22 @@ pub struct Option {
 
 ### 4.1 RFQ Lifecycle
 
-```
-User Request → API Gateway → RFQ Service → MM Gateway (fan-out to MMs via WS)
-                                         → Vault Pricing (internal quote)
+All steps below happen within the API Server process via direct module calls:
 
-MMs respond quotes → MM Gateway → RFQ Service
-                                    ↓
-                              Risk Service validates
-                                    ↓
-                              Best Execution: pick best net price after fees
-                                    ↓
-                              Return selected quote to user
-                                    ↓
-                              User confirms → Soroban tx built & signed → open_option()
+```
+User Request → routes/rfq → RfqModule.requestQuotes()
+                               ├→ MmGatewayModule.fanOutRfq()  (WS to MMs)
+                               └→ VaultModule.generateQuote()   (internal quote)
+
+MM quotes arrive via WS → MmGatewayModule → RfqModule.collectQuotes()
+                                               ↓
+                                         RiskModule.validateQuotes()
+                                               ↓
+                                         RfqModule.bestExecution()  (best net price after fees)
+                                               ↓
+                                         Return selected quote to user
+                                               ↓
+                                         User confirms → PositionsModule.buildTx() → open_option()
 ```
 
 ### 4.2 MM Gateway (WebSocket Server)
@@ -198,9 +238,9 @@ MMs respond quotes → MM Gateway → RFQ Service
 
 ## 5. Prediction Engine & Strategy Service
 
-### 5.1 Prediction Service
+### 5.1 Prediction Module
 
-Receives TradingView alert webhooks and interprets signals for the Strategy Service. No ML models — signal-based decision making.
+Part of the API Server process. Receives TradingView alert webhooks and interprets signals for the Strategy module. No ML models — signal-based decision making.
 
 **Endpoint:** `POST /webhooks/tradingview`
 
@@ -208,7 +248,7 @@ Receives TradingView alert webhooks and interprets signals for the Strategy Serv
 1. Receive TradingView alert payload
 2. Parse and validate: action, asset, expiry duration, optional strike hint
 3. Store signal in PostgreSQL
-4. Publish to Redis channel `prediction:signals`
+4. Call `StrategyModule.onSignal()` directly (same process)
 
 **Signal Schema:**
 
@@ -226,9 +266,9 @@ interface PredictionSignal {
 
 There are no sell signals. Positions run to expiry automatically.
 
-### 5.2 Strategy Service (Automated Wheel)
+### 5.2 Strategy Module (Automated Wheel)
 
-Executes Automated Wheel strategy based on Prediction Engine signals.
+Part of the API Server process. Executes Automated Wheel strategy based on Prediction Engine signals.
 
 **Wheel flow:**
 
@@ -242,7 +282,7 @@ TradingView signal (buy_put) → Validate → RFQ → Open Put → Wait for expi
 
 **On signal received:**
 1. Validate signal against user's strategy config (allowed assets, expiries, capital)
-2. Check Risk Service for position limits
+2. Check `RiskModule.validatePosition()` for position limits
 3. Determine strike (from signal hint or auto-select based on config)
 4. Request RFQ → get best quote
 5. If quote meets minimum premium threshold → build Soroban tx → open position
@@ -271,28 +311,30 @@ Transitions are driven by Prediction Engine signals + settlement events. If no s
 
 ## 6. Oracle & Settlement Worker
 
-### 6.1 Oracle Service
+The Settlement Worker is a **separate Node.js process** (not part of the API Server). It handles all time-sensitive background work: oracle price feeds, expiry detection, settlement triggers, and state reconciliation.
+
+### 6.1 Oracle Module (inside Settlement Worker)
 
 - Polls Chainlink BTC/USD and ETH/USD price feeds at regular intervals
 - Independent backup oracle (configurable provider)
 - **Freshness check:** reject prices older than configurable threshold (e.g. 5 min)
 - **Deviation check:** if primary and backup differ beyond threshold → flag, don't use
-- Publishes prices to Redis `oracle:prices` channel + caches latest
+- Caches latest prices in Redis (shared with API Server for display/pricing)
 - At expiry: determines definitive expiry price with strict validation rules
 - Calls Soroban `set_expiry_price()` with verified price
 - If both oracles unavailable → settlement postponed, no operator price selection allowed
 
-### 6.2 Settlement Worker
+### 6.2 Settlement Module (inside Settlement Worker)
 
-Separate process (no HTTP port), runs on polling schedule.
+Runs on a polling loop (configurable interval, e.g. every 30s).
 
 **Flow:**
 1. Scan options with `expiry <= now` and `status = Open`
-2. Trigger Oracle Service to set expiry price if not yet set
-3. Monitor settlement window for buyer `exercise` calls
+2. Trigger oracle module to set expiry price if not yet set
+3. Monitor settlement window for buyer `exercise` calls on-chain
 4. After `settlement_deadline`: call `release_collateral` for unexercised options
 5. Update off-chain DB position status to match on-chain state
-6. Emit events to Notification Service
+6. Publish events to Redis pub/sub (API Server's notification module picks them up and pushes to users)
 7. Periodic reconciliation: compare on-chain state with off-chain DB, fix discrepancies
 
 ---
@@ -319,14 +361,14 @@ Separate process (no HTTP port), runs on polling schedule.
 
 ---
 
-## 8. API Gateway & Developer Tools
+## 8. API Layer & Developer Tools
 
-### 8.1 API Gateway
+### 8.1 API Layer (routes in API Server)
 
 - **Framework:** Fastify (TypeScript)
 - **Auth:** Wallet-based (Stellar keypair signature) + API keys for partners
 - **Rate limiting:** Per API key / wallet address
-- Routes requests to internal services via Redis pub/sub or internal HTTP
+- Thin route handlers that delegate to internal modules via direct function calls
 
 ### 8.2 Open API Endpoints
 
@@ -392,7 +434,7 @@ Separate repo `safira-web`. Next.js + React application.
 
 ## 10. Database Schema
 
-Single PostgreSQL instance, schema-per-service isolation.
+Single PostgreSQL instance, shared by API Server and Settlement Worker.
 
 ### 10.1 Core Tables
 
@@ -492,20 +534,15 @@ CREATE TABLE vault_state (
 
 ```yaml
 services:
-  api-gateway:         # Fastify, port 3000
-  rfq-service:         # port 3001
-  mm-gateway:          # WebSocket, port 3002
-  strategy-service:    # port 3003
-  prediction-service:  # port 3004
-  risk-service:        # port 3005
-  settlement-worker:   # no port, polling
-  oracle-service:      # port 3006
-  notification-service: # port 3007, WS 3008
+  api-server:          # Fastify + WS, ports 3000 (HTTP), 3001 (MM WS), 3002 (User WS)
+  settlement-worker:   # no port, polling loop
   postgres:            # port 5432
   redis:               # port 6379
   web:                 # Next.js, port 8080
   nginx:               # reverse proxy, ports 80/443
 ```
+
+6 containers total (vs 13 with microservices). Simple to deploy, monitor, and debug.
 
 ### 11.2 Environments
 
@@ -542,7 +579,7 @@ services:
 - Input validation on all services
 - API key + wallet signature authentication
 - TradingView webhook validation (secret token)
-- Inter-service communication over internal Docker network
+- Internal modules communicate via function calls (no network attack surface between modules)
 
 ### 12.3 Operational
 
