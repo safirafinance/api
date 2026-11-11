@@ -14,7 +14,23 @@ Stellar Options is a fully collateralized options trading and strategy infrastru
 
 **Excluded from this MVP:** LP module (external liquidity providers, NAV, Performance Fee, withdrawal queue).
 
-### 1.1 Tech Stack Summary
+### 1.1 Option Lifecycle
+
+1. The user or authorized Wheel strategy selects the exact token (sWBTC/sWETH), option type, size, strike, expiry, and applicable constraints.
+2. The RFQ Router requests quotes from eligible approved MMs and the internal Vault.
+3. Quotes are checked for executability (valid signature, instrument match, MM active) and compared on **best net price after Trading Fee and Opening Base Fee**.
+4. The user approves the selected terms and signs the Soroban transaction.
+5. In one atomic `open_option` transaction: seller's full collateral is locked, buyer's premium is paid, fees are collected, and the position is created on-chain.
+6. The position remains open until expiry. **No early close or buyback.**
+7. At expiry, the Settlement Worker fetches the verified oracle price and calls `determine_expiry`:
+   - **OTM:** Collateral is released to seller automatically. Position closed. Seller keeps premium.
+   - **ITM:** A 2-hour settlement window opens. Counterparty (buyer) is notified to deliver the counter-asset.
+8. Within the settlement window:
+   - **Delivery received:** Contract atomically exchanges assets at strike price via `deliver_settlement`. Position → `Settled`.
+   - **No delivery:** After 2h, `finalize_default` releases seller collateral. Position → `Defaulted`. Seller keeps premium.
+9. The resulting state, asset movements, and fees are reflected in the Web App, partner APIs, and position events audit trail.
+
+### 1.2 Tech Stack Summary
 
 | Layer | Technology |
 |---|---|
@@ -28,7 +44,7 @@ Stellar Options is a fully collateralized options trading and strategy infrastru
 | Supported assets | sWBTC, sWETH (see Section 7 on bridge), USDC |
 | Oracle | Chainlink Data Feeds (off-chain API) + independent backup |
 
-### 1.2 Repository Structure
+### 1.3 Repository Structure
 
 | Repo | Contents |
 |---|---|
@@ -93,7 +109,7 @@ Runs on a polling loop (configurable interval, default 15s). Exposes health and 
 
 **Resilience:** Docker restart policy `unless-stopped`. Health check every 30s. If the worker misses 3 consecutive cycles, Docker restarts it. All settlement operations are **idempotent** — safe to retry after crash/restart. Worker logs last successful cycle timestamp to Redis; API Server can alert if stale.
 
-**Concurrent write safety:** Settlement Worker owns all expiry/settlement state transitions on the `positions` table. API Server owns position creation and read queries. When updating position status, both processes use `SELECT ... FOR UPDATE` row-level locks to prevent race conditions. Clear ownership of state transitions prevents conflicts.
+**Concurrent write safety:** Settlement Worker owns all expiry/settlement state transitions on the `positions` table. API Server owns position creation and read queries. When updating position status, both processes use `SELECT ... FOR UPDATE` row-level locks to prevent race conditions. Clear ownership of state transitions prevents conflicts. **Event ordering:** Settlement Worker always commits DB transaction before publishing to Redis pub/sub — guarantees that API Server reads consistent state when processing events. If a Redis message is lost, the Reconciliation module (every 5 min) detects and corrects any missed state transitions.
 
 ### 2.4 Shared Infrastructure
 
@@ -423,7 +439,7 @@ Signal (sell_put or sell_call) → Open FIRST position → Auto-settle at expiry
 2. Set expiry = 7 days from now
 3. Request RFQ → get best quote
 4. If quote received → open reverse position automatically
-5. If no quote → retry on next Settlement Worker cycle (every 15s) for up to 1 hour, then alert user
+5. If no quote → retry on next Settlement Worker cycle (every 15s) for up to 1 hour. If still no quote after 1 hour → stop strategy (`active = false`), alert user. User keeps the asset and can restart the strategy manually or withdraw.
 
 **Strategy Configuration (per user):**
 
@@ -467,6 +483,8 @@ CALL_OPEN(started from sell_call signal) + OTM expiry → HOLDING_USDC
   → auto-open sell_put at same strike, 7d → PUT_OPEN (repeat)
 CALL_OPEN(started from sell_call signal) + ITM settle → IDLE (received underlying = original deposit)
 ```
+
+**Settlement assumption:** Wheel state machine transitions only on `Settled` or `Expired` statuses. `Defaulted` is a contract-level safety net (prevents collateral from being locked forever), not a Wheel business flow. Approved MMs are economically incentivized to deliver within the settlement window (ITM = profitable settlement for buyer). If a `Defaulted` status occurs — strategy is paused, admin is alerted, manual resolution required.
 
 **Fan-out:** MVP supports one active Wheel strategy per user per asset. No fan-out scaling needed. One TradingView signal triggers evaluation for all active configs for that asset, processed sequentially.
 
