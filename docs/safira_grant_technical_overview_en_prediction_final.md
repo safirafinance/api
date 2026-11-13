@@ -1,4 +1,4 @@
-# Stellar Options — Technical Overview for the Stellar Community Fund
+# Safira Finance — Technical Overview for the Stellar Community Fund
 
 **Stellar / Soroban · Product & Technical Overview · November 2026**
 
@@ -6,7 +6,7 @@
 
 ## 1. Executive Summary
 
-**Stellar Options** is building shared infrastructure for fully collateralized options and automated strategies on Stellar. BTC and ETH token holders will be able to earn option premiums by choosing a price at which they are willing to buy or sell, or buy put options to protect against a price decline. The same capabilities are designed for third-party wallets and DeFi applications through an **Open API, SDK, and a ready-to-use UI Kit**.
+**Safira Finance** is building shared infrastructure for fully collateralized options and automated strategies on Stellar. BTC and ETH token holders will be able to earn option premiums by choosing a price at which they are willing to buy or sell, or buy put options to protect against a price decline. The same capabilities are designed for third-party wallets and DeFi applications through an **Open API, SDK, and a ready-to-use UI Kit**.
 
 A core product differentiator is the **Prediction Engine embedded in the Automated Wheel strategy**. Rather than simply repeating covered calls and cash-secured puts, the strategy uses forward-looking market scenarios to adapt strike selection, expiration, and the timing of its next trade, with the aim of achieving more consistent option-premium income across changing market conditions. The Prediction Engine guides strategy decisions directly; it is not merely an analytics tool for the protocol Vault.
 
@@ -18,7 +18,7 @@ Soroban smart contracts handle position creation, collateral, trading fees, and 
 
 Options give BTC and ETH holders more ways to manage their assets. Users can earn premiums by selling options, set target prices for potential purchases or sales, and use options to protect against market downturns. Traditional options venues require users to understand contract types, strike prices, expirations, pricing, and settlement mechanics. For wallets and DeFi products, adding options typically means sourcing market makers, building settlement infrastructure, and managing pricing and risk.
 
-Stellar Options brings these capabilities together:
+Safira Finance brings these capabilities together:
 
 - **For users:** straightforward flows that show the premium, collateral, fees, expiration, and possible outcomes before a trade is confirmed.
 - **For developers:** reusable APIs, SDKs, RFQ liquidity, and Soroban contracts so partner apps can offer options without building the underlying infrastructure.
@@ -158,6 +158,6 @@ Specific targets, timelines, and budget will be included in a separate grant pro
 
 ## Conclusion
 
-**Stellar Options brings shared options infrastructure to the Stellar ecosystem.** Soroban handles collateral and settlement, the RFQ router combines market-maker quotes with additional Vault liquidity, and the Open API, SDK, and UI Kit let wallets and DeFi apps offer options within their existing products. Rather than building another isolated trading venue, we aim to give Stellar developers a common foundation for options and automated strategies.
+**Safira Finance brings shared options infrastructure to the Stellar ecosystem.** Soroban handles collateral and settlement, the RFQ router combines market-maker quotes with additional Vault liquidity, and the Open API, SDK, and UI Kit let wallets and DeFi apps offer options within their existing products. Rather than building another isolated trading venue, we aim to give Stellar developers a common foundation for options and automated strategies.
 
 ---

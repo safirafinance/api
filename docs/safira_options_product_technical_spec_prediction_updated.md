@@ -1,4 +1,4 @@
-# Stellar Options — Product and Technical Specification
+# Safira Finance — Product and Technical Specification
 
 > **Version:** 2.7  
 > **Date:** November 3, 2026  
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-Stellar Options is an options trading and strategy infrastructure platform built on Stellar and Soroban. It enables holders of tokenized BTC and ETH to earn premiums by selling fully collateralized options, purchase downside protection, and access rule-based strategies through a streamlined interface.
+Safira Finance is an options trading and strategy infrastructure platform built on Stellar and Soroban. It enables holders of tokenized BTC and ETH to earn premiums by selling fully collateralized options, purchase downside protection, and access rule-based strategies through a streamlined interface.
 
 The platform combines quotes from **approved external market makers (MMs)** with a **protocol-operated Vault as an additional, non-primary source of liquidity**. A request-for-quote (RFQ) router checks whether quotes are executable and selects the best net price for the user. On-chain contracts handle collateral, premiums, mandatory fees, and physical settlement.
 
@@ -23,7 +23,7 @@ Returns are variable and never guaranteed. Options, market making, wrapped asset
 
 Holding BTC or ETH presents familiar decisions: at what price to sell, at what price to buy, and how to manage downside risk. Conventional options interfaces impose substantial complexity through strikes, expiries, margin concepts, implied volatility, and multi-step execution.
 
-Stellar Options expresses common objectives as understandable actions and displays the premium, potential outcomes, locked collateral, fees, and execution terms before a transaction is signed. Multiple quote sources improve price discovery. Strategy automation reduces manual repetition without promising fixed yield.
+Safira Finance expresses common objectives as understandable actions and displays the premium, potential outcomes, locked collateral, fees, and execution terms before a transaction is signed. Multiple quote sources improve price discovery. Strategy automation reduces manual repetition without promising fixed yield.
 
 ### Ecosystem partners
 
@@ -265,6 +265,6 @@ Public partner interfaces should faithfully expose the same trade terms and sett
 
 ## Conclusion
 
-Stellar Options is conceived as a shared options infrastructure layer for consumer products and external Web3 integrations. Its main design principles are **permissioned but competing liquidity sources, a supplementary internal Vault, executable-quote routing, transparent mandatory fees, physically settled options on the exact selected asset, and reusable SDK/API/UI capabilities**.
+Safira Finance is conceived as a shared options infrastructure layer for consumer products and external Web3 integrations. Its main design principles are **permissioned but competing liquidity sources, a supplementary internal Vault, executable-quote routing, transparent mandatory fees, physically settled options on the exact selected asset, and reusable SDK/API/UI capabilities**.
 
 The platform does not promise fixed returns, automatic replacement of a defaulting MM, or interchangeability between different wrapped tokens. Its product and architecture remain extensible without defining a particular MVP feature cutoff in this specification.

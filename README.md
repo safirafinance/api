@@ -1,6 +1,6 @@
 # Safira API
 
-Backend for **Stellar Options** — fully collateralized options trading platform on Stellar/Soroban.
+Backend for **Safira Finance** — fully collateralized options trading platform on Stellar/Soroban.
 
 Users trade covered calls, cash-secured puts, and protective puts on tokenized BTC/ETH. The Automated Wheel strategy adapts trades dynamically via a TradingView-based Prediction Engine.
 

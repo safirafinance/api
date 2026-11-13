@@ -1,16 +1,16 @@
-# Stellar Options — MVP Design Document
+# Safira Finance — MVP Design Document
 
 > **Version:** 3.0
 > **Date:** November 8, 2026
 > **Scope:** Full MVP without LP module
 > **Status:** Approved for implementation
-> **Reference:** Rysk Finance V12 (RFQ model, physical settlement patterns)
+
 
 ---
 
 ## 1. Overview
 
-Stellar Options is a fully collateralized options trading and strategy infrastructure platform built on Stellar/Soroban. This design document covers the MVP: options trading (Covered Call, Cash-Secured Put, Long Put), Automated Wheel strategy with TradingView-driven Prediction Engine, RFQ-based liquidity from approved Market Makers and an internal Vault, and developer integration tools (Open API, SDK, UI Kit).
+Safira Finance is a fully collateralized options trading and strategy infrastructure platform built on Stellar/Soroban. This design document covers the MVP: options trading (Covered Call, Cash-Secured Put, Long Put), Automated Wheel strategy with TradingView-driven Prediction Engine, RFQ-based liquidity from approved Market Makers and an internal Vault, and developer integration tools (Open API, SDK, UI Kit).
 
 **Excluded from this MVP:** LP module (external liquidity providers, NAV, Performance Fee, withdrawal queue).
 
@@ -201,7 +201,7 @@ All seller collateral locked in the contract until settlement or expiry. No rehy
 
 ### 3.5 Physical Settlement Flow
 
-Physical settlement — parties exchange actual assets at the strike price. Same model as Rysk Finance.
+Physical settlement — parties exchange actual assets at the strike price.
 
 **At expiry:**
 1. Option reaches `expiry` timestamp
@@ -253,7 +253,7 @@ Opening an option requires buyer authorization. The MM/Vault (seller) commits vi
 
 ### 4.1 RFQ Lifecycle
 
-All steps below happen within the API Server process via direct module calls. Inspired by Rysk's 2-second aggregation window.
+All steps below happen within the API Server process via direct module calls, using a 2-second aggregation window.
 
 ```
 User Request → routes/rfq → RfqModule.requestQuotes(rfq_params)
@@ -290,7 +290,7 @@ interface RfqRequest {
 
 WebSocket endpoint: `ws://api-server:3000/ws/mm` (upgraded from HTTP).
 
-**Protocol:** JSON-RPC 2.0 (like Rysk V12).
+**Protocol:** JSON-RPC 2.0.
 
 **Authentication:** On connect, MM sends `auth` message with API key + Ed25519 signature of a server-provided nonce. This provides non-repudiation (MM cannot deny they submitted a quote).
 
@@ -321,7 +321,7 @@ interface MmQuote {
 
 ### 4.4 MM Settlement Model
 
-MMs do NOT pre-deposit or lock funds. They commit to settlement by providing signed quotes. At expiry, if the option is ITM, the MM has a **2-hour settlement window** to deliver the counter-asset on Stellar. This matches Rysk Finance's approach.
+MMs do NOT pre-deposit or lock funds. They commit to settlement by providing signed quotes. At expiry, if the option is ITM, the MM has a **2-hour settlement window** to deliver the counter-asset on Stellar.
 
 **MM obligations at settlement (when MM is seller):**
 - **ITM Covered Call:** MM locked underlying at opening. Buyer delivers USDC. Contract exchanges atomically. No additional MM action needed — collateral already locked.
